@@ -1,0 +1,851 @@
+---
+title: "COVID-19 Analysis"
+author: "Diptendra Nath Bagchi(dbagchi2), Shrilesh Kathe(sdkathe2), Sahil Wadhwa(sahilw2)"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document: default
+  html_document: 
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+    latex_engine: xelatex
+urlcolor: BrickRed
+---
+
+```{r, setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      fig.align = 'center', 
+                      #tidy.opts = list(width.cutoff=60),
+                      tidy=TRUE)
+                      #fig.width=6, 
+                      #fig.height=6, 
+                      #out.width = '50%')
+```
+
+```{r, load-packages, include = FALSE}
+library("mlbench")
+library("kableExtra")
+library("leaps")
+library("reshape2")
+library("ggplot2")
+library("MASS")
+library("glmnet")
+library("ISLR")
+library("tibble")
+library("KernSmooth")
+library("ElemStatLearn")
+library("gridExtra")
+library("mvtnorm")
+library("dplyr")
+library("caret")
+library("quadprog")
+library("kernlab")
+library("e1071")
+library("xgboost")
+library("tidyverse")
+library("viridis")
+library("kohonen")
+
+```
+
+## Introduction
+
+`COVID-19`, popularly known as coronavirus is caused by a virus called SARS-CoV-2. It has caused irreparable damages world-wide to both economy and to public health. It is one of the deadliest pandemics of recent times that emerged in the last 2 decades. 
+
+The main reason it caused so much of havoc is because of the long incubation time (~2 weeks) and the contagiousness of it. It transmits mainly through respiratory droplets produced when an infected person coughs or sneezes. These droplets can land in the mouths or noses of people who are nearby or possibly be inhaled into the lungs. Spread is more likely when people are in close contact with one another (within about 6 feet). 
+
+United States is the worst affected country in the world with total number of cases at 14 M with more than 90 thousand deaths and counting. The need of this hour is to understand the most vulnerable section of the society and key levers to reduce the spread of COVID-19. It is equally important to learn from the policies that worked and keep improving the quality of healthcare at an increased pace. 
+
+In this analysis, we looked at the publicly available county level data to generate insights that could help the spread of the disease. From our study, we have found that the most vulnerable section of the society are the old people especially who are above 65 years old. It also suggests that the densely populated areas with less per capita hospitals and doctors  are running a high risk of the spread within the county and also beyond it. Hence, based on our analysis we recommend social distancing and providing good health care in a timely manner to reduce the total number of deaths within counties.
+
+## Literature Review
+
+Curating a COVID-19 data repository and forecasting county-level death counts in the United States
+
+The aforementioned talks about prediction techniques to estimate the total number of deaths due to covid-19 in the United States at county level using relevant data collected from various sources. The estimations are used to predict the deaths over a short-term period (e.g. Over the next week), and thus better understand the overall impact of the virus and accordingly implement social distancing policies. A weighted combination of 5 different exponential and linear predictive models were used for predicting the county level deaths.
+
+We took inspiration from this paper to identify important features which the authors have used in their models. For eg, the paper explains how the total reported cases has little to no correlation with the total deaths, since high testing rate doesn’t necessarily imply high number of deaths.
+
+```{r load-data, echo=FALSE, message=FALSE, warning=FALSE}
+covid = read_csv(file = "data/county_data_apr22.csv")
+```
+
+## Data
+
+The data is taken from a GitHub account with a large corpus of hospital-level and county-level data compiled from a variety of public sources to aid data science eforts to combat COVID-19. 
+
+The team reponsible for this data is continually updating and adding to this repository. Currently, it includes data on COVID-19-related cases, deaths, demographics, health resource availability, health risk factors, social vulnerability, and other COVID-19-related information. 
+
+For this analysis, we have used a small subset of the data set provided in the abridged version of the data due to various reasons like processing power.
+
+## Unsupervised Learning
+
+The main objective of the part is to understand the data in the context of the problem. For this analysis, we have chosen covariates based on a combination of technical and contextual understanding of the research question. 
+
+The data come from all the major buckets defined in the GitHub account like geographical, demographics, and health-related risk and resource availability at a county level. Some of the variables seem more important than others like the _density of the county_, the _number of hospitals_, _ICU beds_ that are important factors during a pandemic like COVID-19. 
+
+### Missing Values
+
+There were *missing values for a third of the covariates* but the extent of it varied for different factors but the majority of it was from the health-related factors like _percentage of diabetic population_, _Medicare enrolment percentage_, and so forth. It shows the ineffectiveness of tracking and monitoring in the health care system in the US. 
+
+Some of the missing data could be treated but not all due to constraints like non-numeric data and county-level data like latitude and longitude. Hence, the approach taken in the analysis is to divide variables into two categories; the ones that could be imputed and those which cannot be.  The variables which were to be imputed were filled by the _median of those values and others remains. 
+
+We created per capita variables to remove the size effect on the number of deaths (response variable) at each county as absolute numbers can be less informative while comparing different objects with differing sizes. To see any underlying clusters, a risk variable was also create using both county and state level data. This was defined at a state level with high, medium and low if the number of deaths were more that 593, 165 or others respectively. 
+
+After plotting, one clear pattern that emerged density causes more number of deaths both in absolute terms as well as per capita. This ties back to the research reports as one of the measures to stop this pandemic to social distancing. This means the chances of spreading the disease/infection in dense counties are higher compared to others. 
+
+Another key insight is number of deaths are higher at a state level. This means some states that are capable of introducing new measures and policies are better at preventing the numbers of deaths than others, which are either late in implementing or does not have resources of doing it. 
+
+### Correlation Analysis
+
+By doing a correlation plot of the chosen variables, the only variable that stands out is the population density of the county and higher density means more deaths. This is true for both the absolute number and per capita deaths. The limitation of the correlation plot is the linear association of variables that might not be the case in a pandemic like COVID-19. Hence, we also did clustering to generate insights that could lead us to answer some important questions. 
+
+```{r important columns for analysis}
+col_subset = c("CountyName", 
+               "StateName", 
+               "State",
+               #---------------Geographical Identifires---------------
+               "lat",                   
+               "lon",
+               "POP_LATITUDE",
+               "POP_LATITUDE",
+               "POP_LONGITUDE",
+               #---------------Demographics Identifires---------------
+               "PopulationEstimate2018",
+               "PopulationEstimate65+2017",
+               "PopTotalMale2017",
+               "PopTotalFemale2017",
+               "PopulationDensityperSqMile2010",
+               "#EligibleforMedicare2018",
+               "MedicareEnrollment,AgedTot2017",
+               #---------------Health Resource Availability---------------
+               "#Hospitals",
+               "#ICU_beds",
+               "#FTEHospitalTotal2017",
+               "TotalM.D.'s,TotNon-FedandFed2017",
+               "#HospParticipatinginNetwork2017	",
+               "SVIPercentile",
+               "HPSAScore",
+               "HPSAShortage", 
+               #---------------Health Outcomes and Risk Factors---------------
+               "3-YrDiabetes2015-17",
+               "Smokers_Percentage",
+               
+               "tot_deaths",
+               "tot_cases"
+                )
+```
+
+```{r subset}
+covid_subset = covid[, colnames(covid) %in% col_subset]
+missing_values = apply(covid_subset, 2, function(x) sum(is.na(x)))
+missing_cols = missing_values[missing_values > 0]
+#missing_cols 
+```
+
+```{r Impute missing values using median}
+covid_impute = covid_subset %>%
+  mutate(`#EligibleforMedicare2018` = replace(`#EligibleforMedicare2018`,
+                                  is.na(`#EligibleforMedicare2018`),
+                                  median(`#EligibleforMedicare2018`, na.rm = TRUE)), 
+         `MedicareEnrollment,AgedTot2017` = replace(`MedicareEnrollment,AgedTot2017`,
+                                  is.na(`MedicareEnrollment,AgedTot2017`),
+                                  median(`MedicareEnrollment,AgedTot2017`, na.rm = TRUE)), 
+         `3-YrDiabetes2015-17` = replace(`3-YrDiabetes2015-17`,
+                                  is.na(`3-YrDiabetes2015-17`),
+                                  median(`3-YrDiabetes2015-17`, na.rm = TRUE)),
+         `SVIPercentile` = replace(`SVIPercentile`,
+                                  is.na(`SVIPercentile`),
+                                  median(`SVIPercentile`, na.rm = TRUE)),
+         `HPSAShortage` = replace(`HPSAShortage`,
+                                  is.na(`HPSAShortage`),
+                                  median(`HPSAShortage`, na.rm = TRUE))
+         
+         )
+```
+
+```{r create some new variables}
+covid_impute = covid_impute %>% 
+  mutate(deaths_per_capita = tot_deaths / PopulationEstimate2018, 
+         cases_per_capita = tot_cases / PopulationEstimate2018,
+         hospitals_per_capita = `#Hospitals` / PopulationEstimate2018,
+         doctors_per_capita = `TotalM.D.'s,TotNon-FedandFed2017` / PopulationEstimate2018,
+         ICU_beds_per_capita = `#ICU_beds` / PopulationEstimate2018)
+         
+```
+
+```{r state-level deaths}
+state_level_summary = covid_impute %>%
+  select(deaths_per_capita, tot_deaths, StateName) %>%
+  group_by(StateName) %>%
+  summarise(per_capita_mean = mean(deaths_per_capita), 
+            tot_mean = mean(tot_deaths), 
+            per_capita_median = median(deaths_per_capita), 
+            tot_median = median(tot_deaths), 
+            tot_deaths_state = sum(tot_deaths)
+            )
+```
+
+```{r merge county and state data}
+covid_impute = merge(x = covid_impute, y = state_level_summary, 
+                     by = c("StateName"), all.x = TRUE)
+```
+
+```{r risk score}
+covid_impute = covid_impute %>% 
+  mutate(risk = ifelse(tot_deaths_state > 593, "High", 
+                       ifelse(tot_deaths_state > 165, "Medium", 
+                       "Low")))
+```
+
+```{r}
+corr = round(cor(covid_impute[, -c(1:7, ncol(covid_impute))]), 1)
+melted_cormat = melt(corr)
+#ggplot(data = melted_cormat, aes(x = Var1, y = Var2, fill = value)) + 
+#geom_tile()
+```
+
+```{r}
+p1 = ggplot(covid_impute, aes(x= `PopulationDensityperSqMile2010`, y= tot_deaths, 
+                         #size = tot_deaths, 
+                         color=deaths_per_capita)) +
+  geom_point(alpha=0.7) + #, shape=21, color="black") +
+  scale_size(range = c(.1, 10), name="Population (M)") +
+  scale_fill_viridis(discrete=TRUE, guide=FALSE, option="A") +
+  ylab("Total Deaths") +
+  xlab("Population Density (Sq Mile)") 
+  #xlim(0, 20000) +
+  #ylim(0, 2000)
+
+p2 = ggplot(covid_impute, aes(x= `PopulationEstimate65+2017`, y=tot_deaths , 
+                         #size = tot_deaths, 
+                         color=deaths_per_capita)) +
+  geom_point(alpha=0.7) + #, shape=21, color="black") +
+  scale_size(range = c(.1, 10), name="Population (M)") +
+  scale_fill_viridis(discrete=TRUE, guide=FALSE, option="A") +
+  ylab("Total Deaths") +
+  xlab("Population of Senior Citizens") 
+  #xlim(0, 20000) +
+  #ylim(0, 2000)
+
+p3 = ggplot(covid_impute, aes(x= `#Hospitals`, y=tot_deaths , 
+                         #size = tot_deaths, 
+                         color=deaths_per_capita)) +
+  geom_point(alpha=0.7) + #, shape=21, color="black") +
+  scale_size(range = c(.1, 10), name="Population (M)") +
+  scale_fill_viridis(discrete=TRUE, guide=FALSE, option="A") +
+  ylab("Total Deaths") +
+  xlab("Number of Hospitals") 
+  #xlim(0, 20000) +
+  #ylim(0, 2000)
+
+grid.arrange(p1, p2, p3, ncol = 1)#p3, p4, p5, p6, ncol = 2)
+```
+
+```{r}
+p4 = ggplot(covid_impute, aes(x= `PopulationDensityperSqMile2010`, y= deaths_per_capita, 
+                         size = deaths_per_capita, color=risk)) +
+  geom_point(alpha=0.7) + #, shape=21, color="black") +
+  scale_size(range = c(.1, 10), name="Population (M)") +
+  scale_fill_viridis(discrete=TRUE, guide=FALSE, option="A") +
+  ylab("Total Deaths") +
+  xlab("Population Density (Sq Mile)") 
+  #xlim(0, 20000) +
+  #ylim(0, 2000)
+
+p5 = ggplot(covid_impute, aes(x= `PopulationEstimate65+2017`, y=deaths_per_capita , 
+                         size = deaths_per_capita, color=risk)) +
+  geom_point(alpha=0.7) + #, shape=21, color="black") +
+  scale_size(range = c(.1, 10), name="Population (M)") +
+  scale_fill_viridis(discrete=TRUE, guide=FALSE, option="A") +
+  ylab("Total Deaths") +
+  xlab("Population Density (Sq Mile)") 
+  #xlim(0, 20000) +
+  #ylim(0, 2000)
+
+p6 = ggplot(covid_impute, aes(x= `#Hospitals`, y=deaths_per_capita , 
+                         size = deaths_per_capita, color=risk)) +
+  geom_point(alpha=0.7) + #, shape=21, color="black") +
+  scale_size(range = c(.1, 10), name="Population (M)") +
+  scale_fill_viridis(discrete=TRUE, guide=FALSE, option="A") +
+  ylab("Total Deaths") +
+  xlab("Population Density (Sq Mile)") 
+  #xlim(0, 20000) +
+  #ylim(0, 2000)
+
+#grid.arrange(p1, p2, p3, p4, p5, p6, ncol = 2)
+```
+
+```{r}
+clustering_variables = c("POP_LATITUDE",
+                         "POP_LONGITUDE", 
+               #---------------Demographics Identifires---------------
+               #"PopulationEstimate2018",
+               "PopulationEstimate65+2017",
+               "PopulationDensityperSqMile2010",
+               #"#EligibleforMedicare2018",
+               #"MedicareEnrollment,AgedTot2017",
+               #---------------Health Resource Availability---------------
+               "#Hospitals",
+               "#ICU_beds", 
+               "tot_deaths",
+               "deaths_per_capita"
+               #"#FTEHospitalTotal2017",
+               #"TotalM.D.'s,TotNon-FedandFed2017",
+               #"#HospParticipatinginNetwork2017	",
+               #---------------Health Outcomes and Risk Factors---------------
+               #"3-YrDiabetes2015-17",
+               #"Smokers_Percentage"
+               
+               )
+```
+
+### Clustering 
+
+Three clustering techniques were used to find patterns in the data that could be used to cluster the counties. 
+
+  - `K-Means` clustering was done with 3 clusters (based on the three levels of risk i.e. `Low`, `Medium` & `High`). Some of the key patterns that emerged from the analysis were that the there are clusters where the number of deaths were high due to the population density. 
+  - `Hierarchical` clustering was done but due to the inherent property of the clustering, it did not generate insights that we were trying to find out. Also, one of the limitation was that the more that 90% of the data was attributed to one cluster which is not a desirable property. 
+  - `Self Organizing Maps` were helpful in generating some of the common insighs that we got from the k-means clustering but also helped in understanding the spatial nature of the data. We used a 10*10 matrix because of the speed but we found out that `population latitude`, `number of hospitals` and `icu beds` are important factors that differentiates the counties. 
+
+Overall, this analysis gave us a solid understanding of the data and also some of the features that are helpful to distinguish counties but also an in-depth understanding of the research problem at hand. 
+
+```{r k-means clustering, warning=FALSE}
+covid_kmeans = kmeans(x = covid_impute[, colnames(covid_impute) %in% clustering_variables],
+                      centers = 3
+                      )
+plot_data = cbind(covid_impute[, colnames(covid_impute) %in% clustering_variables], 
+                  "clusters" = covid_kmeans$cluster
+                  )
+p7 = ggplot(plot_data, aes(x= `PopulationDensityperSqMile2010`, y=tot_deaths , 
+                         size = tot_deaths, color=factor(clusters))) +
+  geom_point(alpha=0.7) + #, shape=21, color="black") +
+  scale_size(range = c(.1, 10), name="Population (M)") +
+  scale_fill_viridis(discrete=TRUE, guide=FALSE, option="A") +
+  ylab("Total Deaths") +
+  xlab("Population Density (Sq Mile)") +
+  scale_colour_discrete("Clusters") +
+  ggtitle("K-Means with 3 clusters") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  #scale_size_continuous("Deaths per capita") +
+  xlim(0, 15000) +
+  ylim(0, 1500)
+p7
+```
+
+```{r hierarchical clustering}
+# Dissimilarity matrix
+d <- dist(covid_impute[, colnames(covid_impute) %in% clustering_variables], 
+          method = "euclidean")
+# Hierarchical clustering using Complete Linkage
+hc1 <- hclust(d, method = "complete")
+# Plot the obtained dendrogram
+#plot(hc1)
+# Cut tree into 4 groups
+sub_grp <- cutree(hc1, k = 4)
+# Number of members in each cluster
+#table(sub_grp)
+```
+
+```{r self organizing maps}
+# for speed concern, I only use a few variables (pixels)
+#par(mar = c(4, 4, 0.1, 0.1))
+zip.SOM <- som(as.matrix(covid_impute[, colnames(covid_impute) %in% clustering_variables]), grid = somgrid(10, 10, "rectangular"))
+#plot(zip.SOM) #type = "dist.neighbours")
+# reverse color ramp
+colors <- function(n, alpha = 1) {
+    rev(heat.colors(n, alpha))
+}
+#plot(zip.SOM, type = "counts", palette.name = colors, heatkey = TRUE)
+```
+
+```{r}
+par(mfrow = c(1, 2))
+plot(zip.SOM, type = "mapping", pchs = 20, main = "Mapping Type SOM")
+plot(zip.SOM, main = "Default SOM Plot")
+```
+
+```{r}
+rm(list = ls())
+```
+
+## Supervised Learning
+
+### Classification logic:
+
+The aim here is to correctly classify counties with deaths crossing a particular threshold. We create a class variable which looks at the deaths per 100k population which is total_deaths/population_estimate(in 100k). If this value exceeds 1, that county is classified as 1, else it is classified as 0.
+
+```{r, warning=FALSE, message=FALSE}
+#Load libraries
+
+library(dplyr)
+library(ElemStatLearn)
+library(xgboost)
+library(randomForest)
+library(caret)
+library(kableExtra)
+
+#Load Data File
+
+data_df <-  read.csv("data/county_data_apr22.csv")
+
+# Create classification label column
+
+data_df$death_per_100k <-  ifelse((data_df$tot_deaths/data_df$PopulationEstimate2018) * 100000 > 1, 1, 0)
+
+```
+
+### Data Cleaning (Imputing Missing Data):
+
+There are around 29 columns which contain missing data. We classified these columns into 2 types. Numeric columns and Date columns. 
+For Numeric columns missing data was replaced by median. 
+In date columns, we have data containing when strict measures were implemented (eg stay at home, ban on mass-gatherings, etc). Missing values for these columns may signify that strict measures were not implemented yet (as of 22nd April), which means that their situation was stable. So, the missing date values are imputed with 0.
+
+```{r}
+# Imputation functions
+
+
+
+median_impute <- function(x){
+  x_unique <- unique(x[!is.na(x)])  
+  x_median <- median(x_unique)
+  x_temp <- x
+  x_temp[is.na(x_temp)] <- x_median
+  
+  return (x_temp)
+  
+}
+
+zero_impute <- function(x){
+
+  x[is.na(x)] <- 0
+  
+  return (x)
+  
+}
+```
+
+```{r}
+cols_with_nas <- colnames(data_df)[colSums(is.na(data_df)) > 0]
+
+date_na_cols <- c("stay.at.home","X.50.gatherings","X.500.gatherings", "entertainment.gym")
+
+numeric_na_cols <- setdiff(cols_with_nas,date_na_cols)
+# Impute 0 for date cols
+
+data_df[date_na_cols] <- apply(data_df[date_na_cols],2,zero_impute)
+
+#Impute mode for numeric cols
+
+data_df[numeric_na_cols] <- apply(data_df[numeric_na_cols],2,median_impute)
+```
+
+Train test split:
+We split the available data until 22nd April into train test (80:20) and try to predict the trained model on unseen test data.
+
+```{r}
+
+# Include relevant columns 
+
+cleaned_data_df <- data_df[c(c(15:64),277)]
+
+smp_size <- floor(0.8 * nrow(cleaned_data_df))
+
+## set seed to make partition reproducible
+set.seed(123)
+
+train_ind <- sample(seq_len(nrow(cleaned_data_df)), size = smp_size)
+
+train <- as.matrix(cleaned_data_df[train_ind, ])
+test <- as.matrix(cleaned_data_df[-train_ind, ])
+
+
+```
+
+### Model 1 (XGBoost):
+XGBoost is an optimized distributed gradient boosting library designed to be highly efficient, flexible and portable. It implements machine learning algorithms under the Gradient Boosting framework. XGBoost provides a parallel tree boosting (also known as GBDT, GBM) that solve many data science problems in a fast and accurate way. 
+
+[https://xgboost.readthedocs.io/en/latest/](https://xgboost.readthedocs.io/en/latest/)
+
+#### Hyperparameter Tuning:
+
+We perform cross validation with a grid of parameter values for eta (learning rate), max depth and booster (tree or linear). We select the optimum parameters based on the cross-validation results (using Area under ROC Curve as a metric). After running on the testing data using optimum parameters, we get an accuracy of upto 76%. Below is the confusion matrix:
+
+```{r}
+#XGB
+
+
+#Create XGB DMatrix
+
+dtrain = xgb.DMatrix(data = train[, -ncol(train)],
+                     label = train[, ncol(train)])
+dtest = xgb.DMatrix(data = test[, -ncol(test)],
+                     label = test[, ncol(test)])
+
+
+
+
+set_param <- function(x)
+{
+p <- list(
+    booster = x[1],
+    eta = x[2],
+    max.depth = x[3])
+return (p)
+}
+
+xgb_tuning <-  function(x) {
+
+  params <- set_param(x)
+
+  # train model
+  xgb_tune <- xgb.cv(
+  params = params,
+  data = dtrain,
+  objective = "binary:logistic",
+  verbose = 0,
+  nfold = 10,
+  nrounds = 100,
+  metrics = "auc"
+  )
+  return(xgb_tune)
+
+}
+
+
+
+# create grid for hyperparameters
+
+hyper_grid = expand.grid(
+  booster = c("gbtree", "gblinear"),
+  eta = c(.01, .05, .1, .3),
+  max_depth = c(1, 3, 5, 7,9)
+)
+
+
+
+final_aucs <-  apply(hyper_grid, MARGIN = 1, xgb_tuning)
+
+
+max_auc_idx <-  sapply(final_aucs, function(x) max(x$evaluation_log$test_auc_mean), simplify = TRUE)
+
+
+# Get the corresponding params of the max auc
+
+optimum_params = final_aucs[[which.max(max_auc_idx)]]$params
+
+
+
+
+xgb_fit_final <-  xgboost(
+  params = optimum_params,
+  data = dtrain,
+  nrounds = 100,
+  verbose = 0
+)
+
+
+
+pred_xgb <-  ifelse (predict(xgb_fit_final, dtest) > 0.5,1,0)
+
+accuracy_xgb <-  mean(pred_xgb == test[, ncol(test)])
+
+# print (confusionMatrix(as.factor(pred_xgb), as.factor(test[, ncol(test)]),positive="1"))
+
+kable(table(pred_xgb,test[, ncol(test)]), align = "c") %>%
+ kable_styling("striped", full_width = FALSE) %>% add_header_above(c(" ", "Confusion Matrix_XGB" = 2))
+
+```
+
+### Model 2(Random Forrest):
+
+Random forests or random decision forests are an ensemble learning method for classification, regression and other tasks that operate by constructing a multitude of decision trees at training time and outputting the class that is the mode of the classes (classification) or mean prediction (regression) of the individual trees. Random decision forests correct for decision trees' habit of overfitting to their training set.
+
+[https://en.wikipedia.org/wiki/Random_forest](https://en.wikipedia.org/wiki/Random_forest)
+
+#### Tuning
+Similar to xgboost, we perform cross-validation on training data to get the optimum value for parameter mtry(Number of variables randomly sampled as candidates at each split). After parameter tuning, we use the model for predicting test data. Below are the results:
+
+```{r}
+#Random Forest
+
+
+# Set up 10-fold cross validation
+control <- trainControl(method="cv", number=10, search="grid")
+
+
+#Set mtry for tuning
+
+tunegrid <- expand.grid(.mtry=c(1:15))
+
+rf_gridsearch <- train(as.factor(death_per_100k)  ~., data=train, method="rf", metric="Accuracy", tuneGrid=tunegrid, trControl=control)
+
+#print(rf_gridsearch)
+plot(rf_gridsearch,main="mtry vs Accuracy")
+```
+
+```{r}
+rf <- randomForest(as.factor(death_per_100k)  ~., data=train, mtry=15, ntree=500)
+
+rf_prediction <- predict(rf,test[, -ncol(test)])
+
+accuracy_rf <- mean(rf_prediction == test[, ncol(test)])
+
+#print (confusionMatrix(as.factor(rf_prediction), as.factor(test[, ncol(test)]),positive="1"))
+
+ 
+kable(table(rf_prediction,test[, ncol(test)]), align = "c") %>%
+   kable_styling("striped", full_width = FALSE) %>% add_header_above(c(" ", "Confusion Matrix_RF" = 2))
+```
+
+```{r}
+rm(list = ls())
+```
+
+```{r message=FALSE}
+library(dplyr)
+library(psych)
+library(gbm)
+library(glm2)
+library(glmnet)
+library(kableExtra)
+```
+
+## Regression
+
+We perform regression using three methods:-
+
+* Linear Regression
+* Gradient Boosting Machines
+* Lasso Regression
+
+The data we use for regression is first divided into train and test. The split of train and test is described as follows:-
+
+* Train Data - We use data till 22 April 2020, hence our target variable is the total number of deaths in a county till 22 April 2020
+* Test Data - In order to gauge the usefullness of our models, we gather total number of deaths  of every county till 29 April 2020
+
+The predictors and response variables are selected based on some assumptions and analysis as described below.
+
+### Data Preprocessing
+
+Data is processed in the following way:-
+
+We remove categorical features from the data such as __countyFIPS, STATEFP, COUNTYFYP, CountyName, StateName, State__ as we rather use their geographical features such as lattitude, longitude and population features such as __Poulation Density, Total Population__ and healthcare features such as __Number of Hospitals, Number of ICU Beds__.
+
+We also use deaths and cases from previous days. We use dates after 2 April 2020 (reference date) and consider their impact on future deaths. We pick every $k^{th}$ day from our reference date till our target date which is 22 April 2020 for training and 29 April 2020 for testing.
+
+Missing Values - In order to fill missing values we impute them with their column medians
+
+```{r message=FALSE}
+data <- read.csv("data/data_latest.csv")
+categorical_features <- c("countyFIPS",	"STATEFP",	"COUNTYFP",	
+                          "CountyName",	"StateName",	"State", "CensusRegionName", 
+                           "CensusDivisionName")
+exclude_features <- c("deaths",	"cases",	"tot_deaths",	
+                      "tot_cases", "neighbor_deaths", "neighbor_cases")
+nan_columns <- colnames(data[ , colSums(is.na(data)) != 0])
+# Scaling data to std. normal
+numeric_data <- data %>%  
+  select(-c(exclude_features, categorical_features)) %>% 
+  mutate_all(scale)
+
+numeric_data$X.Deaths_04.22.2020 <- data$X.Deaths_04.22.2020
+numeric_data <- numeric_data %>% 
+  mutate_all(~ifelse(is.na(.), median(., na.rm = TRUE), .))
+```
+
+```{r}
+# functions
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted))
+}
+
+rmse <- function(actual, predicted) {
+  sqrt(mean(((actual - predicted) ^ 2)))
+}
+
+remove_na <- function(df) {
+  df[ , colSums(is.na(df)) == 0]
+}
+
+relevant_dates <- function(k = 3, mode="train") {
+  end_date <- as.Date("04.22.2020", "%m.%d.%Y")
+  start_date <- as.Date("04.02.2020", "%m.%d.%Y")
+  if (mode == "train"){
+    copy_date <- end_date - k  
+  }
+  else {
+    copy_date <- end_date
+  }
+  
+  between_dates <- c()
+  while(copy_date >= start_date + k) {
+    between_dates <- c(copy_date, between_dates)
+    copy_date = copy_date - k
+  }
+  between_dates
+}
+```
+
+```{r message=FALSE}
+
+death_columns <- c("X.Deaths_04.02.2020", 	"X.Deaths_04.03.2020",	"X.Deaths_04.04.2020",	
+                        "X.Deaths_04.05.2020",	"X.Deaths_04.06.2020",	"X.Deaths_04.07.2020",	
+                        "X.Deaths_04.08.2020",	"X.Deaths_04.09.2020",	"X.Deaths_04.10.2020",	
+                        "X.Deaths_04.11.2020",	"X.Deaths_04.12.2020",	"X.Deaths_04.13.2020",	
+                        "X.Deaths_04.14.2020",	"X.Deaths_04.15.2020",	"X.Deaths_04.16.2020",	
+                        "X.Deaths_04.17.2020",	"X.Deaths_04.18.2020",	"X.Deaths_04.19.2020",	
+                        "X.Deaths_04.20.2020",	"X.Deaths_04.21.2020",	"X.Deaths_04.22.2020")
+cases_columns <- c("X.Cases_04.02.2020", 	"X.Cases_04.03.2020",	"X.Cases_04.04.2020",	
+                        "X.Cases_04.05.2020",	"X.Cases_04.06.2020",	"X.Cases_04.07.2020",	
+                        "X.Cases_04.08.2020",	"X.Cases_04.09.2020",	"X.Cases_04.10.2020",	
+                        "X.Cases_04.11.2020",	"X.Cases_04.12.2020",	"X.Cases_04.13.2020",	
+                        "X.Cases_04.14.2020",	"X.Cases_04.15.2020",	"X.Cases_04.16.2020",	
+                        "X.Cases_04.17.2020",	"X.Cases_04.18.2020",	"X.Cases_04.19.2020",	
+                        "X.Cases_04.20.2020",	"X.Cases_04.21.2020",	"X.Cases_04.22.2020")
+misc_columns <- c("POP_LATITUDE", "POP_LONGITUDE", 
+                 "PopulationDensityperSqMile2010", "CensusPopulation2010",
+                 "X.Hospitals", "X.HospParticipatinginNetwork2017", "X.ICU_beds")
+
+
+numeric_data <- numeric_data %>% select(c(cases_columns, death_columns, misc_columns))
+```
+
+```{r message=FALSE}
+
+train_death_dates <- c()
+train_cases_dates <- c()
+for(date in relevant_dates(k=3, mode = "train")) {
+  d <- format(as.Date(date, "1970-01-01"), "%m.%d.%Y")
+  di <- paste("X.Deaths_", d, sep = "")
+  ci <- paste("X.Cases_", d, sep = "")
+  train_death_dates <- c(di, train_death_dates)
+  train_cases_dates <- c(ci, train_cases_dates)
+}
+test_death_dates <- c()
+test_cases_dates <- c()
+for(date in relevant_dates(k=3, mode = "test")) {
+  d <- format(as.Date(date, "1970-01-01"), "%m.%d.%Y")
+  di <- paste("X.Deaths_", d, sep = "")
+  ci <- paste("X.Cases_", d, sep = "")
+  test_death_dates <- c(di, train_death_dates)
+  test_cases_dates <- c(ci, train_cases_dates)
+}
+train_features <- c(misc_columns, train_death_dates, train_cases_dates)
+test_features <- c(misc_columns, test_death_dates[1:length(test_death_dates) - 1], test_cases_dates[1:length(test_cases_dates) - 1])
+train_data <- numeric_data %>% select(train_features)
+train_data$X.Deaths_04.22.2020 <- numeric_data$X.Deaths_04.22.2020
+test_data <- numeric_data %>% select(test_features)
+test_data <- test_data %>% mutate_at("X.Deaths_04.22.2020", scale)
+temp_data <- train_data
+for(i in 1:ncol(test_data)) {
+  temp_data[, i] <- test_data[, i]
+}
+```
+
+```{r}
+kable(data.frame("Training Features" = colnames(train_data), "Testing Features" = c(colnames(test_data), "X.Deaths_04.29.2020"))) %>% 
+  kable_styling(c("striped", "hover", "bordered"), full_width = F) %>% 
+  row_spec(18:18, bold = T, color = "white", background = "#D7261E")
+```
+
+
+The last rows of each column define the target variable for that column.
+
+### Modelling
+
+```{r}
+# Linear Model
+model <- lm(X.Deaths_04.22.2020 ~ ., train_data)
+results <- data.frame(cbind("fips" = data$countyFIPS, "predicted_deaths" = predict(model, temp_data)))
+results$predicted_deaths <- lapply(results$predicted_deaths, function(x) max(0, x))
+results$predicted_deaths <- lapply(results$predicted_deaths, function(x) round(x, 0))
+lm_rmse <- rmse(data$X.Deaths_04.29.2020, unlist(results$predicted_deaths))
+```
+
+```{r}
+summary(model)
+```
+
+```{r}
+plot(model)
+```
+
+Observation of the above plots of linear regression:-
+
+* Residuals vs Fitted Values - A pattern could be identified from this plot. Some points are clustered heavily whereas some are really far off.
+* Norma QQ Plot - The plot signifies that errors in the data are not normally distributed fully
+* Scale Location - Points are clustered around the red line when standardized residuals and fitted values are small. However no clear cut pattern could be observed which tells that errors are non homoscedastic
+* Residuals vs Leverage - There are some influential points such as 1, 2, 7 but we don't specifically remove them
+
+```{r}
+# GLM
+set.seed(6)
+gbm.fit <- gbm(
+  formula = X.Deaths_04.22.2020 ~ .,
+  distribution = "gaussian",
+  data = train_data,
+  n.trees = 6000,
+  interaction.depth = 5,
+  shrinkage = 0.1,
+  cv.folds = 5
+  )  
+gbm_results <- data.frame(cbind("fips" = data$countyFIPS, "predicted_deaths" = predict(gbm.fit, temp_data)))
+gbm_results$predicted_deaths <- lapply(gbm_results$predicted_deaths, function(x) max(0, x))
+gbm_results$predicted_deaths <- lapply(gbm_results$predicted_deaths, function(x) round(x, 0))
+gbm_rmse <- rmse(data$X.Deaths_04.29.2020, unlist(gbm_results$predicted_deaths))
+```
+
+We tried multiple configuration for __shrinkage__, __depth__ and __n_trees__ and found $0.1$, $5$ and $6000$ to perform best. We also tried multiple family distributions such as __poisson__, __bernoulli__ but their performance was significantly bad than __gaussian__ 
+
+```{r}
+# Penalised Regression using Lasso
+set.seed(9)
+lasso_model<- cv.glmnet(model.matrix(model),
+                         train_data$X.Deaths_04.22.2020,
+                        lambda = seq(1, 100, 10),
+                         nfolds = 20,
+                        alpha = 1 # for lasso
+                         )
+plot(lasso_model)
+```
+
+```{r}
+lasso_model <- data.frame(cbind("fips" = data$countyFIPS, "predicted_deaths" = predict(lasso_model, as.matrix(temp_data))))
+lasso_model$predicted_deaths <- lapply(lasso_model$X1, function(x) max(0, x))
+lasso_model$predicted_deaths <- lapply(lasso_model$predicted_deaths, function(x) round(x, 0))
+lasso_rmse <- rmse(data$X.Deaths_04.29.2020, unlist(lasso_model$predicted_deaths))
+```
+
+We perform LASSO regression with 20 folds CV. The purpose of this exercise was to actually get rid of the parameters which don't play a role a significant role in the analysis. Non zero coefficients of the best CV model are as follows
+
+```{r}
+myCoefs <- coef(lasso_model, s="lambda.min");
+kable(data.frame("Non Zero Coefficients of Lasso Model" = c("Intercept",
+"CensusPopulation2010",
+"X.Deaths_04.19.2020",
+"X.Cases_04.19.2020"))) %>% 
+kable_styling(c("striped", "hover", "bordered"), full_width = F)
+```
+
+The model disregards previous happened deaths and cases and other features from the analysis. This is in line with the modelling technique that has been used by Prof. Yu and her group. They also consider only most recent deaths to model future deaths. The performance of Lasso is worse than using OLS model. 
+
+Remark - We tried various configuration for lambda and got lambda as $1$ to perform the best.
+
+```{r}
+kable(data.frame("RMSE" = c(lm_rmse, gbm_rmse, lasso_rmse))) %>% 
+  kable_styling(c("striped", "hover", "bordered"), full_width = F)
+```
+
+## Conclusion:
+
+* Linear model performs the best amongst the other two models
+* From all the three models, it is quite evident that recent deaths in counties are most useful in predicting the future deaths. Counties in certain states follow similar pattern and hence the next logical step should be models for state level.
+* Some features such as __population density__, __number of ICU beds__, __number of hospitals__ etc make logical sense but in analysis they don't show any significant changes in regression analysis.
+* Tree based model (GBM in our case) doesn't perform well than the Linear Model as the data is approximately normally-distributed and in cases like these OLS estimator tends to perform better. Had there been more significant features and data, we could anticipate a different scenario
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+For classification task, after clearly analysing the data and using properly tuned models, we were able to generate classifiers which can correcly classify susceptible counties with about 76% accuracy.
+
+***
